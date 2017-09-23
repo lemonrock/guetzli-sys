@@ -134,7 +134,7 @@ fn verify()
 	use ::std::io::Read;
 	use ::std::path::PathBuf;
 	
-	let testJpegFilePath = PathBuf::from("test-data/RagustanLibertineCoin1795.jpg");
+	let testJpegFilePath = PathBuf::from("test-data/ti-and-raph.jpg");
 	let metadata = testJpegFilePath.metadata().unwrap();
 	
 	let mut file = File::open(&testJpegFilePath).unwrap();
