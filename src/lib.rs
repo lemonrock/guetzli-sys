@@ -38,19 +38,31 @@ cpp!
 	
 	// An upper estimate of memory usage of Guetzli. The bound is max(kLowerMemusaeMB * 1<<20, pixel_count * kBytesPerPixel)
 	const int kBytesPerPixel = 350;
-	
-	char * guetzli_sys_createVectorFromC(size_t capacity);
+
+	typedef char * (* createVectorFromC)(size_t);
 }}
 
 /// Use this for the guetzli's function's `quality` parameter
 pub const DefaultQuality: u8 = 95;
+
+// This is the minimum quality permitted
+pub const LowestQuality: u8 = 84;
 
 /// Use this for the guetzli's function's `memoryLimitInMegabytes` parameter
 pub const DefaultMemoryLimitInMegabytes: Option<u32> = Some(6000);
 
 pub fn guetzli(jpegBytes: &[u8], quality: u8, memoryLimitInMegabytes: Option<u32>) -> Result<Vec<u8>, GuetzliError>
 {
-	debug_assert!(quality <= 100, "quality must be between 0 and 100 inclusive; the default is 95");
+	extern "C" fn createVectorFromC(capacity: usize) -> *mut c_char
+	{
+		let mut vector: Vec<u8> = Vec::with_capacity(capacity);
+		unsafe { vector.set_len(capacity) };
+		let pointer = vector.as_mut_ptr() as *mut c_char;
+		forget(vector);
+		pointer
+	}
+	
+	debug_assert!(quality >= LowestQuality && quality <= 100, "quality must be between 84 and 100 inclusive; the default is 95");
 	let quality = quality as i32;
 	
 	let memlimit_mb = if let Some(memoryLimitInMegabytes) = memoryLimitInMegabytes
@@ -65,6 +77,7 @@ pub fn guetzli(jpegBytes: &[u8], quality: u8, memoryLimitInMegabytes: Option<u32
 		-1
 	};
 	
+	let createVectorFromC = createVectorFromC as *mut c_char;
 	let jpegFileDataPointer = jpegBytes.as_ptr() as *const c_char;
 	let jpegFileDataLength = jpegBytes.len();
 	let mut resultPointer: *mut c_char = unsafe { uninitialized() };
@@ -77,7 +90,7 @@ pub fn guetzli(jpegBytes: &[u8], quality: u8, memoryLimitInMegabytes: Option<u32
 	
 		unsafe
 		{
-			cpp!([jpegFileDataPointer as "const char *", jpegFileDataLength as "const size_t", resultPointerPointer as "char * *", resultLengthPointer as "size_t *", quality as "int", memlimit_mb as "int"] -> i32 as "int"
+			cpp!([createVectorFromC as "createVectorFromC", jpegFileDataPointer as "const char *", jpegFileDataLength as "const size_t", resultPointerPointer as "char * *", resultLengthPointer as "size_t *", quality as "int", memlimit_mb as "int"] -> i32 as "int"
 			{
 				std::string in_data(jpegFileDataPointer, jpegFileDataLength);
 				guetzli::JPEGData jpg_header;
@@ -103,7 +116,7 @@ pub fn guetzli(jpegBytes: &[u8], quality: u8, memoryLimitInMegabytes: Option<u32
 			
 				size_t resultLength = out_data.length();
 				*resultLengthPointer = resultLength;
-				*resultPointerPointer = guetzli_sys_createVectorFromC(resultLength);
+				*resultPointerPointer = createVectorFromC(resultLength);
 				memcpy(*resultPointerPointer, out_data.data(), resultLength);
 				
 				return 0;
@@ -114,13 +127,19 @@ pub fn guetzli(jpegBytes: &[u8], quality: u8, memoryLimitInMegabytes: Option<u32
 	GuetzliError::process(resultCode, || unsafe { Vec::from_raw_parts(resultPointer as *mut u8, resultLength, resultLength) })
 }
 
-#[doc(hidden)]
-#[no_mangle]
-pub extern "C" fn guetzli_sys_createVectorFromC(capacity: usize) -> *mut c_char
+#[test]
+fn verify()
 {
-	let mut vector: Vec<u8> = Vec::with_capacity(capacity);
-	unsafe { vector.set_len(capacity) };
-	let pointer = vector.as_mut_ptr() as *mut c_char;
-	forget(vector);
-	pointer
+	use ::std::fs::File;
+	use ::std::io::Read;
+	use ::std::path::PathBuf;
+	
+	let testJpegFilePath = PathBuf::from("test-data/RagustanLibertineCoin1795.jpg");
+	let metadata = testJpegFilePath.metadata().unwrap();
+	
+	let mut file = File::open(&testJpegFilePath).unwrap();
+	let mut inputJpegBytes = Vec::with_capacity(metadata.len() as usize);
+	file.read_to_end(&mut inputJpegBytes).unwrap();
+	
+	guetzli(&inputJpegBytes, LowestQuality, DefaultMemoryLimitInMegabytes).expect("did not perceptually encode JPEG");
 }
